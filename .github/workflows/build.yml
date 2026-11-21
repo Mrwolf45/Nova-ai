@@ -1,0 +1,34 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unzip project
+        run: unzip -q -o companion.zip -d proj
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - name: Build
+        shell: bash
+        working-directory: proj
+        run: gradle assembleDebug --no-daemon 2>&1 | tee build.log
+      - name: Show only the errors
+        if: failure()
+        shell: bash
+        working-directory: proj
+        run: |
+          echo "=========== COPY FROM HERE ==========="
+          grep -E "^e: |error:|What went wrong|Could not|FAILED" -A2 build.log | head -50
+          echo "=========== TO HERE ==========="
+      - uses: actions/upload-artifact@v4
+        with:
+          name: companion-apk
+          path: proj/app/build/outputs/apk/debug/app-debug.apk
