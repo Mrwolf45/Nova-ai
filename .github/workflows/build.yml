@@ -1,34 +1,102 @@
+
 name: Build APK
+
 on:
   push:
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Unzip project
-        run: unzip -q -o companion.zip -d proj
-      - uses: actions/setup-java@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check and extract project ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f companion.zip || {
+            echo "ERROR: companion.zip not found in repository root."
+            exit 1
+          }
+
+          mkdir -p proj
+          unzip -tq companion.zip
+          unzip -q -o companion.zip -d proj
+
+          SETTINGS_FILE="$(find "$GITHUB_WORKSPACE/proj" -type f \
+            \( -name settings.gradle -o -name settings.gradle.kts \) \
+            -print -quit)"
+
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "ERROR: Gradle settings file not found."
+            find "$GITHUB_WORKSPACE/proj" -maxdepth 5 -type f | head -100
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "Gradle project found: $PROJECT_DIR"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
-      - uses: gradle/actions/setup-gradle@v4
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.7
-      - name: Build
+          gradle-version: "8.7"
+
+      - name: Build debug APK
         shell: bash
-        working-directory: proj
-        run: gradle assembleDebug --no-daemon 2>&1 | tee build.log
-      - name: Show only the errors
-        if: failure()
-        shell: bash
-        working-directory: proj
         run: |
-          echo "=========== COPY FROM HERE ==========="
-          grep -E "^e: |error:|What went wrong|Could not|FAILED" -A2 build.log | head -50
-          echo "=========== TO HERE ==========="
-      - uses: actions/upload-artifact@v4
+          set -o pipefail
+          cd "$PROJECT_DIR"
+          gradle clean assembleDebug --no-daemon --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK_SOURCE="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -s "$APK_SOURCE" ]; then
+            echo "ERROR: APK missing or empty."
+            find "$PROJECT_DIR" -path '*/build/outputs/apk/*' -type f
+            exit 1
+          fi
+
+          unzip -tq "$APK_SOURCE"
+
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          cp "$APK_SOURCE" "$GITHUB_WORKSPACE/output/app-debug.apk"
+
+          echo "APK size:"
+          stat -c '%s bytes' "$GITHUB_WORKSPACE/output/app-debug.apk"
+
+          echo "APK SHA-256:"
+          sha256sum "$GITHUB_WORKSPACE/output/app-debug.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
-          name: companion-apk
-          path: proj/app/build/outputs/apk/debug/app-debug.apk
+          name: zoya-debug-apk
+          path: output/app-debug.apk
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zoya-build-log
+          path: build.log
+          if-no-files-found: ignore
+          
